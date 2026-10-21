@@ -1,4 +1,4 @@
-﻿"""Tests for Pareto machinery: dominance, non-dominated sort, crowding."""
+"""Tests for Pareto machinery: dominance, non-dominated sort, crowding."""
 import unittest
 
 from dea_dd.core.pareto import (dominated, fast_non_dominated_sort,
@@ -39,6 +39,14 @@ class TestCrowdingDistance(unittest.TestCase):
         cd = crowding_distance([0.0, 1.0], [1.0, 0.0])
         self.assertEqual(cd[0], float("inf"))
         self.assertEqual(cd[1], float("inf"))
+
+    def test_no_redundant_renormalization(self):
+        # §6.3：输入已按全局 min-max 归一化，拥挤距离不再二次除以后端跨度。
+        # 三点归一化坐标 0.2/0.4/0.6，邻差 0.4，两目标累加 = 0.8（非旧算法 2.0）
+        cd = crowding_distance([0.2, 0.4, 0.6], [0.2, 0.4, 0.6])
+        self.assertEqual(cd[0], float("inf"))
+        self.assertEqual(cd[2], float("inf"))
+        self.assertAlmostEqual(cd[1], 0.8, places=12)
 
 
 class TestNonDominatedIndices(unittest.TestCase):

@@ -103,30 +103,73 @@ def dynamic_mutation_bits(gen, gen_max, total_ops, dmax=0.05, dmin=0.01):
     return max(2, int(np.ceil(delta * total_ops)))
 
 
+def _swap_diff(os, rng):
+    """交换两个不同工序值的位置，保证交换后 OS 一定改变。"""
+    n = len(os)
+    i = int(rng.integers(0, n))
+    j = int(rng.choice([k for k in range(n) if os[k] != os[i]]))
+    os[i], os[j] = os[j], os[i]
+
+
+def _insert_diff(os, rng):
+    """移除一个元素并插入到使序列改变的位置，保证结果与原串不同。"""
+    before = list(os)
+    n = len(os)
+    for _ in range(64):                      # 有限次重试，避免无尽头
+        i = int(rng.integers(0, n))
+        v = before[i]
+        j = int(rng.integers(0, n))
+        tmp = list(before)
+        tmp.pop(i)
+        tmp.insert(j, v)                     # pop 后长度 n-1，j∈[0,n-1] 恒为合法插入位
+        if tmp != before:
+            os[:] = tmp                      # 只提交真正改变的结果
+            return
+    # 极端情形兜底：做一次必改的异值交换
+    t = list(os)
+    _swap_diff(t, rng)
+    os[:] = t
+
+
+def _inverse_diff(os, rng):
+    """逆序一个非回文段（首尾异值），保证逆序后 OS 一定改变。"""
+    n = len(os)
+    i = int(rng.integers(0, n))
+    j = int(rng.choice([k for k in range(n) if os[k] != os[i]]))
+    if i > j:
+        i, j = j, i
+    os[i:j + 1] = os[i:j + 1][::-1]
+
+
 def mutate_os(os, k_mut, rng):
-    """OS 变异：做 k_mut 次随机 swap/insert/inverse（保持工序多重数，排列恒可行）。
+    """OS 变异：做 k_mut 次 swap/insert/inverse，保证结果与输入一定不同。
+
+    三种基本操作都做了「防空转」处理——交换/逆序改选两个不同工序值的位置、
+    插入按「结果 != 原串」筛选——每次操作都会真实改变当前 OS；最后若 k_mut 次
+    操作偶然相互抵消（结果与原串相同），再补一次必改的异值交换兜底。各工件
+    出现次数（多重数）不变，排列恒可行。
 
     :param os: 待变异的工序排序段
     :param k_mut: 变异位置数
     :param rng: 随机数发生器
-    :return: 变异后的 OS 段（新列表）
+    :return: 变异后的 OS 段（新列表；长度<2 或全同工序值时原样返回，无法变异）
     :rtype: list
     """
-    os = list(os)
     n = len(os)
+    if n < 2 or len(set(os)) < 2:
+        return list(os)
+    os = list(os)
+    orig = list(os)
     for _ in range(k_mut):
         kind = int(rng.integers(0, 3))
-        if kind == 0:                       # 交换
-            i, j = rng.choice(n, size=2, replace=False)
-            os[i], os[j] = os[j], os[i]
-        elif kind == 1:                     # 插入
-            i = int(rng.integers(0, n))
-            v = os.pop(i)
-            j = int(rng.integers(0, n))
-            os.insert(j, v)
-        else:                               # 逆序
-            i, j = sorted(rng.choice(n, size=2, replace=False))
-            os[i:j + 1] = os[i:j + 1][::-1]
+        if kind == 0:                        # 交换两不同工序值
+            _swap_diff(os, rng)
+        elif kind == 1:                      # 移除并插入到改变序列的位置
+            _insert_diff(os, rng)
+        else:                                # 逆序非回文段
+            _inverse_diff(os, rng)
+    if os == orig:                           # k_mut 次操作偶然抵消时兜底
+        _swap_diff(os, rng)
     return os
 
 

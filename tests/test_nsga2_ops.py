@@ -1,4 +1,4 @@
-﻿"""Tests for NSGA-II operators: crossover, dynamic mutation, feasibility."""
+"""Tests for NSGA-II operators: crossover, dynamic mutation, feasibility."""
 import unittest
 from collections import Counter
 
@@ -51,6 +51,12 @@ class TestMutation(unittest.TestCase):
         for _ in range(50):
             out = mutate_os(os, 3, self.rng)
             self.assertEqual(Counter(out), Counter({0: 2, 1: 2}))
+
+    def test_mutate_os_always_changes(self):
+        os = [0, 1, 0, 1]
+        for _ in range(200):
+            out = mutate_os(os, 1, self.rng)
+            self.assertNotEqual(out, os)
 
     def test_mutate_ms_preserves_feasibility(self):
         ms = [0, 0, 1, 0]

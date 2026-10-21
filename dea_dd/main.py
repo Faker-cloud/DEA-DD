@@ -1,8 +1,8 @@
 """DEA-DD 主入口（《算法设计.md》§10 总伪代码）。
 
 三个阶段：(1) 固定加工口径下的多 w EO 预热；(2) 随机加工口径下的改进 NSGA-II
-（蒙特卡洛 R_short，CRN），带延迟触发的自适应局部搜索；(3) 对最终前沿做长仿真
-(R_long)，随后输出指标与 5 张诊断图。
+（蒙特卡洛 R_short，CRN），带延迟触发的自适应局部搜索；(3) 对阶段二最终种群先做
+长仿真 (R_long)，再按长仿真期望非支配排序得到最终前沿，随后输出指标与 5 张诊断图。
 
 执行方式（需求 #4）：
   - 命令行：python -m dea_dd.main --instance data/Brandimarte/BrandimarteMk1.fjs --gen 400
@@ -88,8 +88,8 @@ def _distinct_count(items):
 def run(params, inst_path=None, out_dir="output", log_dir="logs"):
     """程序化执行入口：传入 Params 对象运行完整三阶段算法。
 
-    :param params: :class:`~dea_dd.params.Params` 参数对象（K 会在此统一钳制到
-        ``≤ N / |W|``）
+    :param params: :class:`~dea_dd.params.Params` 参数对象（K 不在此钳制；预热在
+        去重后自行按非支配排序 + 拥挤距离把初始种群截断到 N）
     :param inst_path: `.fjs` 文件路径；缺省用 10×6 合成算例
     :param out_dir: 图像输出目录（缺省 ``output``）
     :param log_dir: 日志目录（缺省 ``logs``）
@@ -97,9 +97,6 @@ def run(params, inst_path=None, out_dir="output", log_dir="logs"):
         final_points 为长仿真后的 ``[(E_f1, E_f2, std_f1, std_f2), ...]``
     :rtype: tuple
     """
-    # 无论命令行还是程序化调用，都统一钳制 K ≤ N/|W|（§11）
-    params.K = min(max(1, params.K), max(1, params.N // len(params.weights)))
-
     log = setup_logging(log_dir)
     rng = np.random.default_rng(params.seed)
     inst = _load_instance(inst_path)
@@ -134,8 +131,6 @@ def run(params, inst_path=None, out_dir="output", log_dir="logs"):
     ls = AdaptiveLocalSearch(inst, due, params, rng)
     nsga2_conv = []
     N = params.N
-    if len(P) > N:
-        P = P[:N]
     t1 = time.time()
     for gen in range(1, params.gen_max + 1):
         k_mut = dynamic_mutation_bits(gen, params.gen_max, total_ops,
@@ -143,17 +138,20 @@ def run(params, inst_path=None, out_dir="output", log_dir="logs"):
         Q = []
         for _ in range(N // 2):
             p1 = _tournament_select(P, rng)
-            p2 = _tournament_select(P, rng)
+            p2 = P[int(rng.integers(0, len(P)))]    # 另一个父代随机选取
             if rng.random() < params.p_c:
                 c1os, c2os = pox_crossover(p1.os, p2.os, inst.n_jobs, rng)
                 c1ms, c2ms = ux_crossover(p1.ms, p2.ms, params.p_c, rng)
             else:
                 c1os, c2os = list(p1.os), list(p2.os)
                 c1ms, c2ms = list(p1.ms), list(p2.ms)
-            c1os = mutate_os(c1os, k_mut, rng)
-            c2os = mutate_os(c2os, k_mut, rng)
-            c1ms = mutate_ms(c1ms, inst, k_mut, rng)
-            c2ms = mutate_ms(c2ms, inst, k_mut, rng)
+            # 变异概率 p_m：以概率 p_m 对每个子代执行变异（OS+MS 各改 k_mut 位），否则跳过
+            if rng.random() < params.p_m:
+                c1os = mutate_os(c1os, k_mut, rng)
+                c1ms = mutate_ms(c1ms, inst, k_mut, rng)
+            if rng.random() < params.p_m:
+                c2os = mutate_os(c2os, k_mut, rng)
+                c2ms = mutate_ms(c2ms, inst, k_mut, rng)
             Q.append(Individual(c1ms, c1os, 0.0, 0.0))
             Q.append(Individual(c2ms, c2os, 0.0, 0.0))
 
@@ -190,17 +188,26 @@ def run(params, inst_path=None, out_dir="output", log_dir="logs"):
     history["nsga2_conv"] = nsga2_conv
     log.info("阶段二完成，耗时 %.1fs", time.time() - t1)
 
-    # ---- 阶段三：非支配前沿长仿真 -----------------------------------------
-    f1s = [ind.f1 for ind in P]
-    f2s = [ind.f2 for ind in P]
-    front_idx = non_dominated_indices(f1s, f2s)
-    stars = [P[i] for i in front_idx]
-    log.info("NSGA-II 阶段最终生成 %d 个不重复解（非支配前沿）",
-             _distinct_count([(s.ms, s.os) for s in stars]))
-    final_points = []
-    for ind in stars:
+    # ---- 阶段三：先长仿真，再按长仿真期望非支配排序得前沿 -------------------
+    # 对阶段二最终种群的每个解都做长仿真(R_long)，再用长仿真期望做非支配排序，
+    # 得到最终前沿（先长仿真后排序，避免短仿真噪声左右前沿构成）
+    long_f1 = []
+    long_f2 = []
+    long_std = []
+    for ind in P:
         m1, m2, s1, s2 = mc_evaluate_long(inst, ind.ms, ind.os, processor,
                                           due, params.R_long)
+        long_f1.append(m1)
+        long_f2.append(m2)
+        long_std.append((s1, s2))
+    front_idx = non_dominated_indices(long_f1, long_f2)
+    log.info("NSGA-II 阶段最终生成 %d 个不重复解（长仿真非支配前沿，候选 %d）",
+             _distinct_count([(P[i].ms, P[i].os) for i in front_idx]), len(P))
+    final_points = []
+    for i in front_idx:
+        ind = P[i]
+        m1, m2 = long_f1[i], long_f2[i]
+        s1, s2 = long_std[i]
         final_points.append((m1, m2, s1, s2))
         d1, d2 = decode_evaluate(inst, ind.ms, ind.os, due)
         log.info("前沿解：E[makespan]=%.2f(std %.2f) E[TWTE]=%.2f(std %.2f) "
@@ -260,6 +267,8 @@ def main(argv=None, params=None, inst_path=None, out_dir="output", log_dir="logs
         ap.add_argument("--instance", default=None,
                         help=".fjs 文件路径（缺省用 10x6 合成算例）")
         ap.add_argument("--ul", type=float, default=Params.UL)
+        ap.add_argument("--pm", type=float, default=Params.p_m,
+                        help="变异概率 p_m（缺省 0.1）")
         ap.add_argument("--N", type=int, default=Params.N)
         ap.add_argument("--N_eo", type=int, default=Params.N_eo)
         ap.add_argument("--Iter_EO", type=int, default=Params.Iter_EO)
@@ -272,7 +281,7 @@ def main(argv=None, params=None, inst_path=None, out_dir="output", log_dir="logs
         args = ap.parse_args(argv)
         params = Params(N=args.N, N_eo=args.N_eo, Iter_EO=args.Iter_EO,
                         gen_max=args.gen, UL=args.ul, R_short=args.R_short,
-                        R_long=args.R_long, seed=args.seed)
+                        R_long=args.R_long, seed=args.seed, p_m=args.pm)
         inst_path = inst_path if inst_path is not None else args.instance
         out_dir = args.out
         log_dir = args.logs
@@ -280,4 +289,4 @@ def main(argv=None, params=None, inst_path=None, out_dir="output", log_dir="logs
 
 
 if __name__ == "__main__":
-    main()
+    main(inst_path="../data/Brandimarte/BrandimarteMk1.fjs")

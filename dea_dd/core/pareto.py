@@ -63,7 +63,12 @@ def fast_non_dominated_sort(f1: List[float], f2: List[float]) -> List[List[int]]
 
 def crowding_distance(f1_norm: List[float], f2_norm: List[float],
                       indices: List[int] = None) -> Dict[int, float]:
-    """在归一化 ``(f1, f2)`` 上算拥挤距离。
+    """在已归一化的 ``(f1, f2)`` 上算拥挤距离（标准 NSGA-II 公式）。
+
+    输入坐标必须已由共享的 :class:`Normalizer` 按全局 min-max（式(10)）归一化，
+    即「除以全局跨度」这一步在调用方完成。§6.3 约定用**全局逐代极值**当跨度
+    （而非每个前沿各自归一化），故本函数**不再二次除以前端跨度**，只累加相邻差、
+    端点置 +inf。
 
     :param f1_norm: 归一化 makespan 列表
     :param f2_norm: 归一化 TWTE 列表（与 f1_norm 对齐）
@@ -82,10 +87,8 @@ def crowding_distance(f1_norm: List[float], f2_norm: List[float],
         order = sorted(idxs, key=lambda i: obj[i])
         dist[order[0]] += float("inf")
         dist[order[-1]] += float("inf")
-        span = obj[order[-1]] - obj[order[0]]
-        if span > 0.0:
-            for k in range(1, n - 1):
-                dist[order[k]] += (obj[order[k + 1]] - obj[order[k - 1]]) / span
+        for k in range(1, n - 1):
+            dist[order[k]] += obj[order[k + 1]] - obj[order[k - 1]]
     return dist
 
 
