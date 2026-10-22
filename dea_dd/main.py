@@ -40,6 +40,7 @@ from dea_dd.diagnostics import metrics, plots
 from dea_dd.diagnostics.logging_setup import setup_logging
 from dea_dd.diagnostics.generator import random_instance
 from dea_dd.params import Params
+from dea_dd.paths import resolve_project_path
 
 
 def _load_instance(path):
@@ -85,19 +86,21 @@ def _distinct_count(items):
     return len(seen)
 
 
-def run(params, inst_path=None, out_dir="output", log_dir="logs"):
+def run(params, inst_path=None, out_dir="outputs/dea_dd", log_dir="logs"):
     """程序化执行入口：传入 Params 对象运行完整三阶段算法。
 
     :param params: :class:`~dea_dd.params.Params` 参数对象（K 不在此钳制；预热在
         去重后自行按非支配排序 + 拥挤距离把初始种群截断到 N）
     :param inst_path: `.fjs` 文件路径；缺省用 10×6 合成算例
-    :param out_dir: 图像输出目录（缺省 ``output``）
+    :param out_dir: 图像输出目录（缺省 ``outputs/dea_dd``）
     :param log_dir: 日志目录（缺省 ``logs``）
     :return: 元组 ``(history, final_points)``，history 含各阶段收敛序列与前沿，
         final_points 为长仿真后的 ``[(E_f1, E_f2, std_f1, std_f2), ...]``
     :rtype: tuple
     """
-    log = setup_logging(log_dir)
+    out_dir = resolve_project_path(out_dir)
+    log_dir = resolve_project_path(log_dir)
+    log = setup_logging(log_dir, name="dea_dd")
     rng = np.random.default_rng(params.seed)
     inst = _load_instance(inst_path)
     due = generate_due_dates(inst, rng=rng)
@@ -240,7 +243,7 @@ def run(params, inst_path=None, out_dir="output", log_dir="logs"):
     return history, final_points
 
 
-def main(argv=None, params=None, inst_path=None, out_dir="output", log_dir="logs"):
+def main(argv=None, params=None, inst_path=None, out_dir="outputs/dea_dd", log_dir="logs"):
     """命令行 / 程序化入口。
 
     命令行示例：
@@ -276,7 +279,7 @@ def main(argv=None, params=None, inst_path=None, out_dir="output", log_dir="logs
         ap.add_argument("--R_short", type=int, default=Params.R_short)
         ap.add_argument("--R_long", type=int, default=Params.R_long)
         ap.add_argument("--seed", type=int, default=Params.seed)
-        ap.add_argument("--out", default="output")
+        ap.add_argument("--out", default="outputs/dea_dd")
         ap.add_argument("--logs", default="logs")
         args = ap.parse_args(argv)
         params = Params(N=args.N, N_eo=args.N_eo, Iter_EO=args.Iter_EO,
@@ -289,4 +292,4 @@ def main(argv=None, params=None, inst_path=None, out_dir="output", log_dir="logs
 
 
 if __name__ == "__main__":
-    main(inst_path="../data/Brandimarte/BrandimarteMk1.fjs")
+    main()

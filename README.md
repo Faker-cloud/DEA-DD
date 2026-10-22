@@ -35,7 +35,7 @@ from dea_dd.params import Params
 from dea_dd.main import run
 
 params = Params(N=50, N_eo=20, Iter_EO=40, gen=100, R_short=20, R_long=10000)
-run(params, inst_path="data/Brandimarte/BrandimarteMk1.fjs")
+run(params, inst_path="data/Brandimarte/新建文件夹/BrandimarteMk1.fjs")
 ```
 
 ### 关键命令行参数
@@ -72,6 +72,7 @@ run(params, inst_path="data/Brandimarte/BrandimarteMk1.fjs")
 dea_dd/
   params.py              全局参数（N / N_eo / gen / UL … 默认值即 §11）
   main.py                总流程编排、CLI 与编程式入口
+  compare.py             对比实验入口（DEA-DD vs 传统 NSGA-II）
   core/                  核心数据与解码
     instance.py          Instance、.fjs 解析、交货期生成 (Bagheri & Zandieh 2011)
     encoding.py          MS+OS 编码、EO 实值粒子、反射修复、粒子解码
@@ -83,6 +84,8 @@ dea_dd/
     preheat.py           阶段一多 w 预热与种子选择
     nsga2.py             阶段二交叉 / 变异 / 环境选择
     local_search.py      双向邻域 + 自适应算子选择 (式 17/18)
+  baselines/             基线对比算法
+    nsga2.py             传统 NSGA-II 基线（随机初始化 + 固定变异，无 EO/局部搜索）
   simulation/
     stochastic.py        对数正态加工时间 + 蒙特卡洛评估 (式 19/19a/20)
   diagnostics/           诊断与输出
@@ -95,13 +98,18 @@ dea_dd/
 ## 日志
 
 全部关键步骤用 `logging` 输出（**未使用 `print`**），同时写入 **控制台** 与
-**`logs/dea_dd.log`**（滚动追加）。除常规阶段信息外，日志还额外输出：
+**按算法区分的日志文件**（滚动追加）：DEA-DD → `logs/dea_dd.log`、传统
+NSGA-II → `logs/nsga2.log`、对比汇总 → `logs/compare.log`。除常规阶段信息外，
+日志还额外输出：
 
 - EO 阶段每个 w 生成的候选解中**不重复解个数**；
 - EO 阶段合并去重后**共计不重复解个数**；
 - NSGA-II 阶段最终生成的不重复解个数（非支配前沿规模）。
 
-## 诊断图（输出到 `output/`）
+> 日志与图片的输出路径都按 **DEA-DD 项目根目录** 锚定（`dea_dd/paths.py` 的
+> `PROJECT_ROOT`），因此从控制台（任意 cwd）或 PyCharm 运行都会写到同一处。
+
+## 诊断图（DEA-DD 输出到 `outputs/dea_dd/`，基线输出到 `outputs/nsga2/`）
 
 1. `eo_convergence.png` — EO 阶段 makespan / TWTE 随迭代变化
 2. `eo_w_fronts.png` — EO 阶段每个 w 生成解的帕累托前沿（相同 w 的点连线）
@@ -115,8 +123,53 @@ dea_dd/
 python -m unittest discover -s tests -v
 ```
 
-48 个用例覆盖编码解码、EO、预热、交叉/变异、局部搜索、随机层与指标；玩具例
-（§3.1.1）验证 `Cmax = 13`、左移 `TWTE = 4`、右移 `TWTE = 1`。
+57 个用例覆盖编码解码、EO、预热、交叉/变异、局部搜索、随机层、指标与传统
+NSGA-II 基线；玩具例（§3.1.1）验证 `Cmax = 13`、左移 `TWTE = 4`、右移
+`TWTE = 1`。
+
+## 对比实验（传统 NSGA-II 基线）
+
+为验证 DEA-DD 各项创新点的收益，提供**传统 NSGA-II 基线**
+（`dea_dd/baselines/nsga2.py`）与一键对比入口 `dea_dd/compare.py`。基线去掉
+DEA-DD 的三大类创新：
+
+- **无 EO 预热**（直接随机初始化）；
+- **无局部搜索**（只用交叉/变异）；
+- **固定变异位数**（固定改 2 位，不做式 (16) 动态变异）。
+
+与 DEA-DD **完全共享**编码、双解码、随机口径蒙特卡洛评估（CRN）与重叠参数
+`N / p_c / p_m / gen_max / UL / R_short / R_long / seed`（即同一个 `Params`），
+保证是「同一赛道」下的公平对比。
+
+```powershell
+# 单独运行传统 NSGA-II 基线（图写入 outputs/nsga2/）
+python -m dea_dd.baselines.nsga2 --instance data/Brandimarte/BrandimarteMk1.fjs --gen 100
+
+# 一键对比两者：--instance 既可传单个 .fjs，也可传目录（非递归，只扫顶层 .fjs）
+# 每个算例默认重复 10 次（每次 seed 递增 1），第 i 次结果隔离到
+#   outputs/<算例名>/run_XXX/（dea_dd/、nsga2/、front_comparison.png），
+# 逐算例汇总 → outputs/<算例名>/summary.csv，跨算例汇总 → outputs/summary_all.csv
+python -m dea_dd.compare --instance data/Brandimarte/BrandimarteMk1.fjs --gen 100 --runs 10
+python -m dea_dd.compare --instance data/Brandimarte --gen 100 --runs 10   # 扫整个目录
+```
+
+`compare.py` 每次运行的指标：两个前沿各自的 **NPS** 与 **HV**（共用同一参考点，
+否则不可比），以及双向覆盖率 **C(DEA-DD | NSGA-II)** 与 **C(NSGA-II | DEA-DD)**。
+每个算例重复 `--runs` 次（缺省 10，第 i 次 seed = 基准 seed + i - 1）；单算例汇总在
+`summary.csv`、多算例跨例汇总在 `summary_all.csv`，日志里也有 mean ± std。输出目录
+按 `outputs/<算例名>/run_XXX/` 逐算例隔离。
+
+```python
+from dea_dd.compare import compare
+from dea_dd.params import Params
+
+# 程序化对比：复用同一个 Params，保证重叠参数一致；runs 控制每算例重复次数
+compare(Params(N=100, gen=400, R_short=20, R_long=10000),
+        inst_path="data/Brandimarte/新建文件夹/BrandimarteMk1.fjs", runs=10)
+# inst_path 传目录 → 对顶层所有 .fjs 逐个对比，各自输出隔离
+compare(Params(N=100, gen=400, R_short=20, R_long=10000),
+        inst_path="data/Brandimarte", runs=10)
+```
 
 ## 数据集
 
